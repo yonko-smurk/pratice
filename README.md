@@ -287,9 +287,9 @@ class TicketChatConsumer(AsyncJsonWebsocketConsumer):
 > "Presence is a class-level `defaultdict` keyed by ticket ID, with the inner dict keyed by *channel name* — so the same user with two browser tabs counts as two channels but gets de-duplicated by email inside `_broadcast_presence` before the payload goes out. On `connect` and `disconnect` we mutate the dict and fire a `chat.presence` event to the whole group, and the green dot in the UI flips. No polling, no heartbeat — the WebSocket lifecycle *is* the heartbeat."
 
 Switch to `analytics/signals.py`:
-> "The other half of real-time is signals. Whenever a `Ticket` is saved, a `post_save` handler in `analytics/signals.py` does two things: writes a row to `TicketEventLog` for the audit trail, and broadcasts a JSON payload to the `analytics_dashboard` group so every admin watching `/analytics/` sees the KPI tick up *in the same render frame*. That's the demo moment in Part 1 where the counter increments without a refresh."
+> "The other half of real-time is signals. `analytics/signals.py` has two `post_save` receivers. The first listens on `Ticket` and pushes refreshed KPIs to the `analytics_admin` channel group. The second listens on `TicketEventLog` and pushes individual activity events to the `analytics_activity` group. Both fan out to whichever admins are watching `/analytics/` — that's the Part 1 demo moment where the counter ticks up without a page refresh."
 
-> "Custom middleware in `agent/middleware.py` updates `last_seen_at` on every authenticated request — that's how the ops dashboard knows which agents are 'active' versus 'idle'."
+> "And there's `AgentActivityMiddleware` in `agent/middleware.py` — it updates the agent's `last_seen_at` after every authenticated *staff* request. That's how the ops dashboard tells 'active' from 'idle'."
 
 ---
 
