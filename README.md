@@ -102,21 +102,52 @@ Have a **fresh local PDF receipt** of the architecture diagram on a side monitor
 
 ---
 
-## 3 · Student: RAG Assistant *(1:30)*
+## 3 · Student: AI Real-Time Chat — The Integrated KB → Community → Escalate Pipeline *(2:00)*
+
+> **This is the most important section of the demo. It is where every piece of the platform — RAG, the KB, pgvector, the community module, the ticket system, and the action-confirmation framework — is shown working as one integrated flow.**
 
 **Window A.** Open `/assistant/` (chat page).
 
-**Say:**
-> "This is the RAG Assistant — `assistant/views.py::send_message_stream`. Local mode embeds the query with `nomic-embed-text`, runs cosine similarity in pgvector, injects the top-k chunks into a `llama3.1:8b` prompt, and streams the response over Server-Sent Events."
+**Say (the integration narrative — say this out loud, slowly):**
+> "This isn't just a chatbot. The assistant is wired into three other subsystems and chooses between them based on confidence. Every user message walks the same three-step pipeline in `assistant/views.py`:
+>
+> **Step 1 — Knowledge Base RAG.** The query is embedded locally with `nomic-embed-text`, pgvector returns the top-k cosine-similar chunks from the `KBArticle` table, and `llama3.1:8b` generates a grounded answer with a confidence score and snippet citations. The streamed response comes back over Server-Sent Events.
+>
+> **Step 2 — Community fallback.** If KB confidence is below 0.8, the assistant calls `community.search.find_resolved_answer` to look for a previously *accepted* answer to a semantically similar community question. If one exists, the assistant inlines it — author, vote score, link. If no resolved answer exists, it falls back further to `search_similar_questions` and shows the top three similar open questions.
+>
+> **Step 3 — Dual escalation.** If the community has nothing relevant either, the assistant offers the user **two pre-built action requests** in one message: *Ask the Community* (creates a community question) **or** *Create a Support Ticket* (escalates to an agent). Both are queued as `AssistantActionRequest` rows pending one-click confirmation.
+>
+> So the same chat surface gracefully degrades: pgvector RAG → community search → human escalation. And every write action — ticket creation, community post, ticket assignment, status change — funnels through the same confirm/cancel framework, so the user is always in control."
 
+### Demo the three branches in order — pick questions that hit each fallback
+
+**Branch A — High-confidence KB hit (clean RAG path):**
 1. New conversation → ask: **"How do I set up Office 365 on my phone?"**
-2. **Watch the response stream token-by-token.** Point at it.
-3. Scroll down — show the **citations** (links back to KB articles in `docs/kb/`).
-4. Ask a follow-up: **"What if it asks for an app password?"** — context is preserved.
-5. In the sidebar, click **New Conversation** — show the conversation list.
-6. Delete one conversation — show the action confirmation flow (`/assistant/action/<id>/confirm/`).
+2. Watch the response stream token-by-token.
+3. Point at the **KB confidence score** and the **snippet pills** below the answer — those come straight from `kb_snippets` in the message payload.
+4. Ask a follow-up: **"What about app passwords?"** — context is preserved across turns.
 
-> "If Ollama is unavailable — like on the Render free tier — the same endpoint falls back to PostgreSQL trigram search and Groq for inference. Same UX, no client changes."
+**Branch B — Low-confidence KB → community resolved-answer fallback:**
+1. New conversation → ask something the KB doesn't fully cover but a community user has answered, e.g. **"Why is my student email rejecting attachments over 25MB?"**
+2. The KB answer streams in first (low confidence).
+3. Below it, a **second assistant message** appears: *"I found a community answer that might help"* — with the question title, accepted-answer preview, author name, vote score, and a link to `/community/<id>/`.
+4. Click through to the community question to prove the link works.
+
+**Branch C — Nothing found → dual-escalation offer:**
+1. New conversation → ask something genuinely novel: **"How do I export my historical timetable as iCal for the past three years?"**
+2. KB answer is low-confidence, no resolved community answer, no similar questions.
+3. The assistant posts the **escalation card** with **two buttons side by side**: *Ask the Community* and *Create a Support Ticket*.
+4. Click **Ask the Community** → confirmation screen → confirm → switch to `/community/` and show the question is now there with the user as author.
+5. Re-trigger the flow with another novel query and this time click **Create a Support Ticket** → confirm → land on the new ticket detail page with the original question, KB confidence, and KB snippets all baked into the description for the agent.
+
+**Branch D — Direct command routing (the action layer):**
+1. Type **"show my open tickets"** → assistant returns a structured `tickets_list` card pulled from `assistant/tools.py::list_my_open_tickets`.
+2. Type **"create ticket: VPN drops every 10 minutes"** → assistant returns a pending action; click **Confirm** to create.
+3. Type **"status of ticket #5"** → assistant returns ticket status inline.
+4. As an agent (Window B briefly): **"assign ticket #5"** → pending action → confirm → ticket reassigned.
+
+**Wrap the section with:**
+> "One chat box, four behaviours: RAG retrieval, community lookup, dual-channel escalation, and structured tool calls — all stitched together by an intent router and a single action-confirmation framework. And if Ollama goes down on the Render deployment, `USE_FAKE_EMBEDDINGS=1` swaps the embedding step for PostgreSQL trigram search and Groq takes over inference — without a single line of view-layer code changing."
 
 ---
 
