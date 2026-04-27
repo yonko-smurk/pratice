@@ -35,7 +35,7 @@
 **Open VS Code Explorer panel.**
 
 **Say:**
-> "TSMS is a 12-app Django monolith. Each app owns one bounded context, and the file convention is the same throughout: `views.py` is HTTP only, `services.py` holds business logic and the LLM calls, `models.py` is the schema plus minimal helpers, and signals fire side-effects so the views stay thin."
+> "TSMS is a 12-app Django monolith. Each app owns one bounded context, and the file convention is consistent: `views.py` is HTTP only, a domain module — `services.py`, or `routing.py` in tickets, `recommender.py` in community — holds business logic and the LLM calls, `models.py` is the schema plus minimal helpers, and signals fire side-effects so the views stay thin."
 
 Walk the explorer once, point at each app:
 
@@ -55,7 +55,7 @@ Walk the explorer once, point at each app:
 | `core` | Feature flags, health endpoint | `core/flags.py` |
 
 **Say:**
-> "The design decision behind splitting into 12 apps rather than one giant app is testability — each app has its own `tests/` folder and can be tested in isolation. And because all cross-app dependencies go through service functions (not direct ORM queries from another app's view), I could swap the LLM provider from Ollama to Groq with a single env var change."
+> "The design decision behind splitting into 12 apps rather than one giant app is testability — each app has its own test module (a `tests/` folder for most, `tests.py` for chat) and can be tested in isolation. And because all cross-app dependencies go through service functions (not direct ORM queries from another app's view), I could swap the LLM provider from Ollama to Groq with a single env var change."
 
 ---
 
