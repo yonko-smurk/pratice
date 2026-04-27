@@ -24,6 +24,7 @@ brew services start postgresql@16
 source .venv/bin/activate
 python manage.py migrate
 python _seed_demo.py            # users, tickets, KB articles, embeddings
+python _seed_demo_community.py  # seeds the resolved Q&A used by Branch B
 python _check_kb.py             # confirm embeddings exist
 daphne -b 0.0.0.0 -p 8000 tsms.asgi:application
 ```
@@ -41,6 +42,8 @@ Have a **fresh local PDF receipt** of the architecture diagram on a side monitor
 
 > **Backup:** if Ollama dies mid-demo, set `USE_FAKE_EMBEDDINGS=1` in `.env` and restart Daphne — RAG will fall back to lexical search and the demo continues. Mention this on camera, it's a feature, not a bug.
 
+> **KB confidence threshold:** the integrated pipeline (KB → Community → Escalate) uses a confidence threshold of **0.6**, defined in `ai_faq/services.py` and `assistant/views.py`. Confidence is computed as `0.5 × max(similarities) + 0.5 × mean(top-3 similarities)` over the pgvector cosine scores returned by `_search_chunks`. We chose 0.6 (rather than a stricter 0.8) because `nomic-embed-text` produces cosine scores that typically peak in the 0.65–0.78 range for paraphrased queries — at 0.8 the system would offer escalation on almost every answer, defeating the purpose. At 0.6 the three demo branches behave distinctly: clean RAG when the KB has it, community fallback when it partially matches, and dual-escalation when nothing matches.
+
 ---
 
 ## Time Budget (14:00 total)
@@ -48,9 +51,9 @@ Have a **fresh local PDF receipt** of the architecture diagram on a side monitor
 | # | Section | Window | Time | Cumulative |
 |---|---|---|---|---|
 | 1 | Landing + auth + roles | A/B/C | 0:45 | 0:45 |
-| 2 | Student — AI Wizard → ticket creation | A | 1:45 | 2:30 |
-| 3 | Student — RAG Assistant (streaming, KB citations) | A | 1:30 | 4:00 |
-| 4 | Student — Community Q&A (ask, vote, accept, escalate) | A | 1:30 | 5:30 |
+| 2 | Student — AI Wizard → ticket creation | A | 1:30 | 2:15 |
+| 3 | **AI chat: KB → Community → Escalate integrated pipeline** | A | 2:00 | 4:15 |
+| 4 | Student — Community Q&A (ask, vote, accept, escalate) | A | 1:15 | 5:30 |
 | 5 | Agent — Queue, claim, skill routing, recommended steps | B | 2:00 | 7:30 |
 | 6 | Real-time chat (Student ↔ Agent) + presence + notifications | A+B | 1:30 | 9:00 |
 | 7 | Agent — Profile, skills, availability, agent analytics | B | 1:00 | 10:00 |
@@ -113,7 +116,7 @@ Have a **fresh local PDF receipt** of the architecture diagram on a side monitor
 >
 > **Step 1 — Knowledge Base RAG.** The query is embedded locally with `nomic-embed-text`, pgvector returns the top-k cosine-similar chunks from the `KBArticle` table, and `llama3.1:8b` generates a grounded answer with a confidence score and snippet citations. The streamed response comes back over Server-Sent Events.
 >
-> **Step 2 — Community fallback.** If KB confidence is below 0.8, the assistant calls `community.search.find_resolved_answer` to look for a previously *accepted* answer to a semantically similar community question. If one exists, the assistant inlines it — author, vote score, link. If no resolved answer exists, it falls back further to `search_similar_questions` and shows the top three similar open questions.
+> **Step 2 — Community fallback.** If KB confidence is below 0.6, the assistant calls `community.search.find_resolved_answer` to look for a previously *accepted* answer to a semantically similar community question. The match-ratio gate requires at least 50% of the query tokens to appear in the question's title or body. If a resolved match is found, the assistant inlines it — author, vote score, link. If no resolved answer exists, it falls back further to `search_similar_questions` and shows the top three similar open questions.
 >
 > **Step 3 — Dual escalation.** If the community has nothing relevant either, the assistant offers the user **two pre-built action requests** in one message: *Ask the Community* (creates a community question) **or** *Create a Support Ticket* (escalates to an agent). Both are queued as `AssistantActionRequest` rows pending one-click confirmation.
 >
@@ -124,20 +127,25 @@ Have a **fresh local PDF receipt** of the architecture diagram on a side monitor
 **Branch A — High-confidence KB hit (clean RAG path):**
 1. New conversation → ask: **"How do I set up Office 365 on my phone?"**
 2. Watch the response stream token-by-token.
-3. Point at the **KB confidence score** and the **snippet pills** below the answer — those come straight from `kb_snippets` in the message payload.
-4. Ask a follow-up: **"What about app passwords?"** — context is preserved across turns.
+3. Point at the answer and explain that the KB had strong cosine-similarity matches (`max + top-3 average ≥ 0.6`), so the assistant trusted it and **did not** offer escalation — *that's the system being honest about when it knows the answer*.
+4. Ask a follow-up — **"What is the maximum email attachment size?"** — confidence stays high (the KB has it), no fallback fires.
 
 **Branch B — Low-confidence KB → community resolved-answer fallback:**
-1. New conversation → ask something the KB doesn't fully cover but a community user has answered, e.g. **"Why is my student email rejecting attachments over 25MB?"**
-2. The KB answer streams in first (low confidence).
-3. Below it, a **second assistant message** appears: *"I found a community answer that might help"* — with the question title, accepted-answer preview, author name, vote score, and a link to `/community/<id>/`.
+1. New conversation → ask: **"How do I export my historical timetable as iCal?"**
+2. The LLM streams a polite *"the knowledge base does not have enough information"* answer (the KB has nothing on timetables, so confidence is well below 0.6).
+3. Below it, a **second assistant message** appears: *"I found a community answer that might help"* — with the question title, **Alice Murphy's accepted answer preview**, vote score `9`, and a link to `/community/94/`.
 4. Click through to the community question to prove the link works.
+5. *(This is the integration money-shot: the KB layer admitted it didn't know, so the assistant searched the community module's accepted-answer index and stitched a real human-curated answer back into the chat.)*
 
-**Branch C — Nothing found → dual-escalation offer:**
-1. New conversation → ask something genuinely novel: **"How do I export my historical timetable as iCal for the past three years?"**
-2. KB answer is low-confidence, no resolved community answer, no similar questions.
-3. The assistant posts the **escalation card** with **two buttons side by side**: *Ask the Community* and *Create a Support Ticket*.
-4. Click **Ask the Community** → confirmation screen → confirm → switch to `/community/` and show the question is now there with the user as author.
+**Branch C — Nothing relevant → similar-questions card + dual-escalation offer (the full three-tier degradation in one query):**
+1. New conversation → ask: **"Where do I collect my graduation gown?"**
+2. The LLM streams a short *"the knowledge base does not cover this"* answer (KB has no graduation content → confidence ≈ 0).
+3. **Three things now stack on screen**, illustrating the complete fallback chain:
+   - The low-confidence KB answer at the top.
+   - A **"Here are some similar community questions"** card with weak keyword matches (no resolved answer was found, so the assistant degrades to similar-question search via `search_similar_questions`).
+   - The **escalation card** at the bottom with two buttons side-by-side: *Ask the Community* and *Create a Support Ticket*.
+4. Click **Ask the Community** → confirmation screen → confirm → switch to `/community/` and show the new question is now there with the user as author and timestamp.
+5. *(Say out loud: "So you can see the entire degradation chain in one screenshot — the KB tried first, the community-search tier surfaced loosely-related questions but couldn't find an exact resolved answer, and finally the system offers the user two human-in-the-loop paths. The same `AssistantActionRequest` confirmation framework that powers ticket creation also powers community posting.")*
 5. Re-trigger the flow with another novel query and this time click **Create a Support Ticket** → confirm → land on the new ticket detail page with the original question, KB confidence, and KB snippets all baked into the description for the agent.
 
 **Branch D — Direct command routing (the action layer):**
