@@ -170,7 +170,18 @@ else:
 ```
 > "The confidence isn't just `max(similarity)`. It's a 50/50 blend of the **best** match and the **average of the top three**. Why? Because a single high-scoring chunk in a sea of low ones is unreliable — it could be a one-off keyword collision. A high *average* across the top-three means several semantically related chunks all agree, which is the signal I actually trust. Below 0.6 the assistant escalates to community fallback and then to a ticket — the integrated pipeline I show in Part 1."
 
+**Scroll up in the same file to `_search_chunks` (~line 193)** and point at just the two-line guard:
+```python
+def _search_chunks(query, top_k=5, article_ids=None):
+    if USE_FAKE_EMBEDDINGS:
+        return _lexical_snippets(query, top_k=top_k, article_ids=article_ids)
+    qvec = embed_text(query)
+    ...
+```
+
 > "And there's a clean degradation path. The `_search_chunks` function checks the `USE_FAKE_EMBEDDINGS` setting up front — if it's on, retrieval skips the embedding step entirely and falls back to `_lexical_snippets`, which runs `icontains` over `KbArticle.title` and `body_md` and computes a cheap match-ratio similarity. That's exactly how the Render deployment works: no GPU, no Ollama, `USE_FAKE_EMBEDDINGS=1` in the env, same view, same response shape, same SSE stream — the swap is invisible to the frontend. As a defence-in-depth layer, `embed_text` itself also falls back to a deterministic fake embedding if Ollama 5xxs unexpectedly, so the system stays up even when something downstream breaks."
+
+> *Don't open `_lexical_snippets` or `embed_text` themselves — the guard line tells the whole story and you have a 45-second budget.*
 
 ---
 
@@ -207,27 +218,36 @@ def recommend_agents(ticket, limit=5):
 
 ## 5 · Critical Algorithm 3 — Ticket-Offer Routing & Expiry  *(0:30)*
 
-**Open `tickets/routing.py` around line 113.**
+**Open `tickets/routing.py` and jump to `offer_next_agent` at line 150.** (The `post_save` hook itself lives in `tickets/signals.py:10` — `on_ticket_created_offer_agents` — if the examiner asks where it's wired.)
 
 **Say:**
-> "Recommendation is one thing, *delivery* is another. When a new ticket is created, a `post_save` signal fires `offer_next_agent`, which is the function that takes a ranked agent list and turns it into a real time-boxed offer."
+> "Recommendation is one thing, *delivery* is another. When a new ticket is created, a `post_save` signal in `tickets/signals.py` fires `offer_next_agent`, and that's the function that picks the top-ranked agent and turns it into a real time-boxed offer."
 
-Show the core:
+Show the core (lines 150–185):
 ```python
-# 1. Mark stale offers as expired
+# 1. Expire stale pending offers for this ticket
 TicketOffer.objects.filter(
-    ticket=ticket, status=PENDING, expires_at__lt=now,
-).update(status=EXPIRED, responded_at=now)
+    ticket=ticket,
+    status=TicketOffer.Status.PENDING,
+    expires_at__lt=now,
+).update(status=TicketOffer.Status.EXPIRED, responded_at=now)
 
 # 2. Rank candidates, excluding agents already offered this ticket
-already_offered = set(TicketOffer.objects.filter(ticket=ticket).values_list("agent_id", flat=True))
+already_offered = set(
+    TicketOffer.objects.filter(ticket=ticket).values_list("agent_id", flat=True)
+)
 ranked = _rank_agents(ticket, exclude_agent_ids=already_offered)
 
 # 3. Create a new offer for the top-ranked agent with a 45-second TTL
 TicketOffer.objects.create(
-    ticket=ticket, agent=ranked[0]["agent"],
-    expires_at=now + timedelta(seconds=45),
+    ticket=ticket,
+    agent=chosen["agent"],
+    status=TicketOffer.Status.PENDING,
+    offered_at=now,
+    expires_at=now + timedelta(seconds=timeout_seconds),  # default 45s
     round_number=TicketOffer.objects.filter(ticket=ticket).count() + 1,
+    score=chosen["score"],
+    reason=chosen["reason"],
 )
 ```
 
@@ -366,7 +386,7 @@ markers =
 | LLM (cloud) | Groq `llama-3.1-8b-instant` | env `LLM_PROVIDER=groq` |
 | Confidence formula | `0.5 × max + 0.5 × avg(top-3)` | `ai_faq/services.py:~336` |
 | Agent scorer | 30/25/20/15/10 weights, max 100 | `community/recommender.py:46` |
-| Offer TTL | 45 seconds, round-tracked | `tickets/routing.py:113` |
+| Offer TTL | 45 seconds, round-tracked | `tickets/routing.py:150` |
 | WebSockets | `/ws/tickets/<id>/`, `/ws/analytics/` | `chat/consumers.py`, `analytics/consumers.py` |
 | Tests | 535 collected; 8 E2E (Playwright) | `pytest --collect-only` |
 | CI | GitHub Actions: Ruff → pytest → coverage | `.github/workflows/ci.yml` |
