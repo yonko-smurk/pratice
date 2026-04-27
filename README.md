@@ -262,25 +262,29 @@ TicketOffer.objects.create(
 **Open `chat/consumers.py`.**
 
 **Say:**
-> "There are two WebSocket channels in the system. Both inherit from `AsyncWebsocketConsumer`, both join a Redis-backed channel group, and both use `@database_sync_to_async` to bridge to the synchronous Django ORM."
+> "There are two WebSocket channels in the system. Both inherit from `AsyncJsonWebsocketConsumer`, both join a Redis-backed channel group, and both use `@database_sync_to_async` to bridge to the synchronous Django ORM."
 
-Show the presence trick (line ~14):
+Show the presence trick (line ~25):
 ```python
-class TicketChatConsumer(AsyncWebsocketConsumer):
-    _room_users: dict[str, set[int]] = {}  # class-level, per-process
+class TicketChatConsumer(AsyncJsonWebsocketConsumer):
+    # {ticket_id: {channel_name: {"email": ..., "role": ...}}}
+    _room_users = defaultdict(dict)
 
     async def connect(self):
-        ticket_id = self.scope["url_route"]["kwargs"]["ticket_id"]
-        self.group = f"ticket_{ticket_id}"
-        await self.channel_layer.group_add(self.group, self.channel_name)
-        self._room_users.setdefault(self.group, set()).add(self.scope["user"].id)
-        await self.channel_layer.group_send(self.group, {
-            "type": "presence_update",
-            "online_user_ids": list(self._room_users[self.group]),
-        })
+        self.ticket_id = self.scope["url_route"]["kwargs"]["ticket_id"]
+        self.room_group = f"ticket_{self.ticket_id}"
+        ...
+        await self.channel_layer.group_add(self.room_group, self.channel_name)
+        await self.accept()
+
+        TicketChatConsumer._room_users[self.ticket_id][self.channel_name] = {
+            "email": self.user.email,
+            "role": self.user.role,
+        }
+        await self._broadcast_presence()
 ```
 
-> "Presence is a class-level dict keyed by group name, mutated on `connect` and `disconnect`. When either fires, every other socket in the group receives a `presence_update` event and the green dot in the UI flips. No polling, no heartbeat — the WebSocket lifecycle *is* the heartbeat."
+> "Presence is a class-level `defaultdict` keyed by ticket ID, with the inner dict keyed by *channel name* — so the same user with two browser tabs counts as two channels but gets de-duplicated by email inside `_broadcast_presence` before the payload goes out. On `connect` and `disconnect` we mutate the dict and fire a `chat.presence` event to the whole group, and the green dot in the UI flips. No polling, no heartbeat — the WebSocket lifecycle *is* the heartbeat."
 
 Switch to `analytics/signals.py`:
 > "The other half of real-time is signals. Whenever a `Ticket` is saved, a `post_save` handler in `analytics/signals.py` does two things: writes a row to `TicketEventLog` for the audit trail, and broadcasts a JSON payload to the `analytics_dashboard` group so every admin watching `/analytics/` sees the KPI tick up *in the same render frame*. That's the demo moment in Part 1 where the counter increments without a refresh."
