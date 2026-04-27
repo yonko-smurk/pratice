@@ -148,11 +148,12 @@ Have a **fresh local PDF receipt** of the architecture diagram on a side monitor
 5. *(Say out loud: "So you can see the entire degradation chain in one screenshot — the KB tried first, the community-search tier surfaced loosely-related questions but couldn't find an exact resolved answer, and finally the system offers the user two human-in-the-loop paths. The same `AssistantActionRequest` confirmation framework that powers ticket creation also powers community posting.")*
 5. Re-trigger the flow with another novel query and this time click **Create a Support Ticket** → confirm → land on the new ticket detail page with the original question, KB confidence, and KB snippets all baked into the description for the agent.
 
-**Branch D — Direct command routing (the action layer):**
-1. Type **"show my open tickets"** → assistant returns a structured `tickets_list` card pulled from `assistant/tools.py::list_my_open_tickets`.
-2. Type **"create ticket: VPN drops every 10 minutes"** → assistant returns a pending action; click **Confirm** to create.
-3. Type **"status of ticket #5"** → assistant returns ticket status inline.
-4. As an agent (Window B briefly): **"assign ticket #5"** → pending action → confirm → ticket reassigned.
+**Branch D — Direct command routing (the structured-tool layer):**
+1. Type **"show my open tickets"** → assistant returns a structured `tickets_list` card pulled from `assistant/tools.py::list_my_open_tickets` (handled by the `my_open_tickets` intent in `detect_intent`).
+2. Type **"how many tickets do I have?"** → assistant returns a one-line summary of total + open counts (the `my_ticket_count` intent).
+3. Type **"open the community forum"** → assistant returns a community-browse card (the `community_browse` intent).
+
+> "These three commands prove the assistant isn't *just* RAG — it has a structured intent layer that bypasses the LLM entirely for read-only queries against the database. Ticket creation in this demo is shown via the AI Wizard in section 2 and via the *Create a Support Ticket* button in Branch C above, both of which exercise the same `tools.create_ticket` function the chat router uses."
 
 **Wrap the section with:**
 > "One chat box, four behaviours: RAG retrieval, community lookup, dual-channel escalation, and structured tool calls — all stitched together by an intent router and a single action-confirmation framework. And if Ollama goes down on the Render deployment, `USE_FAKE_EMBEDDINGS=1` swaps the embedding step for PostgreSQL trigram search and Groq takes over inference — without a single line of view-layer code changing."
