@@ -150,24 +150,36 @@ def answer_with_context(question: str) -> dict:
 
 ## 3 · Critical Algorithm 1 — RAG + Confidence Gating  *(0:45)*
 
-**Open `ai_faq/services.py`.**
+**Open `ai_faq/services.py` and jump to line 192 — the `_search_chunks` function.**
 
 **Say:**
-> "This is the core retrieval function. Two things make it non-trivial: the cosine query and the confidence formula."
+> "This is the retrieval engine. Two things make it non-trivial: a graceful fallback for when there's no GPU, and a real cosine query against pgvector."
 
-Show the retrieval (around line 192):
+Point at lines 192–203 — the whole function fits on one screen:
 ```python
-qvec = embed_text(query)
-qs = (
-    KbChunk.objects
-    .annotate(distance=CosineDistance("embedding", qvec))
-    .order_by("distance")[:top_k]
-)
-sims = [1.0 - r.distance for r in qs]
-```
-> "pgvector exposes `CosineDistance` as a Django ORM annotation, so I can sort by semantic similarity in the database — no Python-side ranking, no fetching all chunks into memory."
+def _search_chunks(query: str, top_k: int = 5, article_ids=None):
+    if article_ids is not None and not article_ids:
+        return [], []
 
-Show the confidence calculation (around line 336):
+    if USE_FAKE_EMBEDDINGS:
+        return _lexical_snippets(query, top_k, article_ids=article_ids)
+
+    qvec = embed_text(query)
+    chunk_qs = KbChunk.objects.all()
+    if article_ids is not None:
+        chunk_qs = chunk_qs.filter(article_id__in=article_ids)
+
+    qs = chunk_qs.annotate(distance=CosineDistance("embedding", qvec)).order_by("distance")[:top_k]
+    results = list(qs)
+    sims = [1.0 - r.distance for r in results]  # cosine similarity ~ (1 - distance)
+    return results, sims
+```
+
+> "Read top-to-bottom: the **`USE_FAKE_EMBEDDINGS` guard** is the degradation path — when it's on we skip the embedding step entirely and fall back to `_lexical_snippets`, which runs `icontains` over `KbArticle.title` and `body_md` and computes a cheap match-ratio similarity. That's exactly how the Render deployment works: no GPU, no Ollama, `USE_FAKE_EMBEDDINGS=1` in the env — same view, same response shape, same SSE stream, swap invisible to the frontend. As defence-in-depth, `embed_text` *itself* also returns a deterministic fake embedding if Ollama 5xxs, so the system stays up even when something downstream breaks."
+
+> "When the guard is off — the normal path — we embed the query, then ask pgvector to do the work. `CosineDistance` is exposed as a Django ORM annotation, so the database sorts by semantic similarity for us — no Python-side ranking, no fetching all chunks into memory. We convert distance back to similarity with `1 - distance` and that's the array that drives confidence."
+
+**Scroll down to line 238 — inside `stream_answer_with_context`** — and point at the confidence calculation:
 ```python
 if sims:
     top3 = sims[:3] if len(sims) >= 3 else sims
@@ -175,20 +187,11 @@ if sims:
 else:
     conf = 0.0
 ```
-> "The confidence isn't just `max(similarity)`. It's a 50/50 blend of the **best** match and the **average of the top three**. Why? Because a single high-scoring chunk in a sea of low ones is unreliable — it could be a one-off keyword collision. A high *average* across the top-three means several semantically related chunks all agree, which is the signal I actually trust. Below 0.6 the assistant escalates to community fallback and then to a ticket — the integrated pipeline I show in Part 1."
+> "The confidence isn't just `max(similarity)`. It's a 50/50 blend of the **best** match and the **average of the top three**. Why? Because a single high-scoring chunk in a sea of low ones is unreliable — it could be a one-off keyword collision. A high *average* across the top-three means several semantically related chunks all agree, which is the signal I actually trust. Below 0.6 the assistant escalates to community fallback and then to a ticket — the integrated pipeline I showed in Part 1."
 
-**Scroll up in the same file to `_search_chunks` (~line 193)** and point at just the two-line guard:
-```python
-def _search_chunks(query, top_k=5, article_ids=None):
-    if USE_FAKE_EMBEDDINGS:
-        return _lexical_snippets(query, top_k=top_k, article_ids=article_ids)
-    qvec = embed_text(query)
-    ...
-```
+> "And the same block appears verbatim at line **336** inside the non-streaming sibling `answer_with_context` — one formula, two response shapes (SSE for chat, JSON for the legacy HTMX widget)."
 
-> "And there's a clean degradation path. The `_search_chunks` function checks the `USE_FAKE_EMBEDDINGS` setting up front — if it's on, retrieval skips the embedding step entirely and falls back to `_lexical_snippets`, which runs `icontains` over `KbArticle.title` and `body_md` and computes a cheap match-ratio similarity. That's exactly how the Render deployment works: no GPU, no Ollama, `USE_FAKE_EMBEDDINGS=1` in the env, same view, same response shape, same SSE stream — the swap is invisible to the frontend. As a defence-in-depth layer, `embed_text` itself also falls back to a deterministic fake embedding if Ollama 5xxs unexpectedly, so the system stays up even when something downstream breaks."
-
-> *Don't open `_lexical_snippets` or `embed_text` themselves — the guard line tells the whole story and you have a 45-second budget.*
+> *Don't open `_lexical_snippets` or `embed_text` themselves — `_search_chunks` tells the whole story and you have a 45-second budget.*
 
 ---
 
