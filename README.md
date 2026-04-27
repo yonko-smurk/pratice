@@ -213,11 +213,10 @@ Have a **fresh local PDF receipt** of the architecture diagram on a side monitor
 2. Point at the **green presence dot** showing the other party is online.
 3. Type a message in B — it appears instantly in A.
 4. Reply in A — appears instantly in B.
-5. Show a **typing indicator** if implemented (otherwise skip).
-6. In Window A, navigate away from the ticket — show that the **notification badge** updates in the top nav (ticket update notification consumer).
-7. Switch back — the notification clears.
+5. Open a **third tab in Window B** on `/tickets/queue/` so the **queue-count-badge** is visible. In Window A, submit a *new* ticket → switch to that third tab and show the badge increment in real time (queue WebSocket push, not a refresh).
+6. *(Out-of-band notifications are handled by `tickets/notifications.py` over email — `notify_agents_ticket_created`, `notify_agents_customer_replied`, `notify_customer` — wired into `tickets/services.py` and `tickets/views.py`. If you have `EMAIL_BACKEND=console` set, switch to the Daphne terminal and show the queued email body printed to stdout when the customer replies in Window A.)*
 
-> "Two WebSocket channels in production: ticket chat + analytics live feed. Both backed by Redis as the channel layer."
+> "Two WebSocket channels in production: ticket chat (with presence) + analytics live feed. Both backed by Redis as the channel layer. Out-of-band notifications go via SMTP through `tickets.notifications` so agents are reachable even when they're not in the app."
 
 ---
 
