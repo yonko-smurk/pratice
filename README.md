@@ -34,11 +34,11 @@ daphne -b 0.0.0.0 -p 8000 tsms.asgi:application
 | Window | Profile / Browser | Logged in as | Tab(s) open |
 |---|---|---|---|
 | **A** | Chrome (Student) | `sarah.obrien@college.ie` | `/tickets/my/` |
-| **B** | Chrome Incognito (Agent) | `carol.jones@support.io` | `/tickets/queue/` and `/agent/` |
+| **B** | Chrome Incognito (Agent) | `alice.murphy@support.io` | `/tickets/queue/` and `/agent/` |
 | **C** | Firefox (Admin) | `admin@support.io` | `/ops/dashboard/` and `/analytics/` |
 | **D** | Chrome Incognito 2 (Live cloud) | logged out | `https://tud-tsms.onrender.com` |
 
-> **Why Carol for Window B?** `scripts/seed_demo.py` gives Carol Jones the strongest skill stack for the Section 5 demo phrase (Email 5, Office 365 5, Password Reset 4), so `_rank_agents` reliably routes the freshly-created Outlook ticket to her and her offer card populates on `/agent/`. Other seeded agents are still in the system: Alice (networking/VPN), Bob (software install/Windows), David (hardware/printers), Emma (generalist/triage). Pick a different ticket phrase if you want the offer to go to a different agent.
+> **Why Alice for Window B?** `scripts/seed_demo.py` gives Alice Murphy the strongest networking skill stack (Networking 5, VPN 5, Wi-Fi 4, Firewalls 4), so `_rank_agents` reliably routes the freshly-created VPN/Wi-Fi ticket used in Section 5 to her and her offer card populates on `/agent/`. The other seeded agents are still available if you want to demo different routing: Bob Chen (software install/Windows/Office 365), Carol Jones (Email/Office 365/Password Reset), David Smith (hardware/printers), Emma Wilson (generalist/triage). Change the Section 5 ticket phrase to retarget.
 
 Have a **fresh local PDF receipt** of the architecture diagram on a side monitor in case the projector shows the small UI.
 
@@ -189,7 +189,7 @@ Have a **fresh local PDF receipt** of the architecture diagram on a side monitor
 
 1. Show the queue — point out priority colour bars, SLA timers, skill tags on each row.
 2. Apply a **priority filter** (High) and a **search**.
-3. **Trigger a fresh offer first.** In Window A (`sarah.obrien@college.ie`), submit a quick new ticket titled **"Outlook will not connect to my Office 365 email"** — these tokens (`outlook`, `office`, `365`, `email`) hit Carol Jones's top skills (Email 5, Office 365 5) so `_rank_agents` will route the offer to her. The `post_save` signal in `tickets/signals.py` fires `tickets.routing.offer_next_agent`, which creates a `TicketOffer` row that expires in **45 seconds** — so do this *immediately* before the next step.
+3. **Trigger a fresh offer first.** In Window A (`sarah.obrien@college.ie`), submit a quick new ticket titled **"VPN will not connect over campus Wi-Fi"** — these tokens (`vpn`, `wifi`, `wi`, `fi`, `networking`) hit Alice Murphy's top skills (Networking 5, VPN 5, Wi-Fi 4) so `_rank_agents` will route the offer to her. The `post_save` signal in `tickets/signals.py` fires `tickets.routing.offer_next_agent`, which creates a `TicketOffer` row that expires in **45 seconds** — so do this *immediately* before the next step.
 4. Switch to `/agent/` (the agent dashboard) — point at the **pending Ticket Offer card**. This is the AI-routed offer: `tickets/routing.py::_rank_agents` scores `(skill_score * 10) - load` against the agent's `AgentSkill` rows; the top candidate gets the offer with a short reason string (e.g. *"Matched specialty"*).
 5. Click **Accept** on the offer card — POST to `tickets:offer_accept` (`/tickets/offers/<id>/accept/`), the ticket is assigned to this agent and the card disappears. (Skip is the alternative — POSTs to `tickets:offer_skip`, the offer is marked `DECLINED`, and `offer_next_agent` fires again to route to the next-ranked agent.)
 6. Back on `/tickets/queue/`, open a different unclaimed ticket → click **Claim** → status flips to In Progress, the audit log row appears.
