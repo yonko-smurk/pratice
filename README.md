@@ -299,7 +299,7 @@ return TicketOffer.objects.create(
 **Open `chat/consumers.py`.**
 
 **Say:**
-> "There are two WebSocket channels in the system. Both inherit from `AsyncJsonWebsocketConsumer`, both join a Redis-backed channel group, and both use `@database_sync_to_async` to bridge to the synchronous Django ORM."
+> "There are two WebSocket consumers in the system — `TicketChatConsumer` for ticket chat and `AnalyticsDashboardConsumer` for the live KPI dashboard. Both inherit from `AsyncJsonWebsocketConsumer` and both join a Redis-backed channel group. The chat consumer also uses `@database_sync_to_async` to bridge permission checks and message creation across to the synchronous Django ORM."
 
 Show the presence trick (line ~25):
 ```python
@@ -324,7 +324,7 @@ class TicketChatConsumer(AsyncJsonWebsocketConsumer):
 > "Presence is a class-level `defaultdict` keyed by ticket ID, with the inner dict keyed by *channel name* — so the same user with two browser tabs counts as two channels but gets de-duplicated by email inside `_broadcast_presence` before the payload goes out. On `connect` and `disconnect` we mutate the dict and fire a `chat.presence` event to the whole group, and the green dot in the UI flips. No polling, no heartbeat — the WebSocket lifecycle *is* the heartbeat."
 
 Switch to `analytics/signals.py`:
-> "The other half of real-time is signals. `analytics/signals.py` has two `post_save` receivers. The first listens on `Ticket` and pushes refreshed KPIs to the `analytics_admin` channel group. The second listens on `TicketEventLog` and pushes individual activity events to the `analytics_activity` group. Both fan out to whichever admins are watching `/analytics/` — that's the Part 1 demo moment where the counter ticks up without a page refresh."
+> "The other half of real-time is signals. `analytics/signals.py` has two `post_save` receivers. The first listens on `Ticket` and pushes refreshed KPIs to the `analytics_admin` channel group. The second listens on `TicketEventLog` and pushes individual activity events to the `analytics_activity` group — *and* re-broadcasts KPIs, so lifecycle events like resolved or reopened keep the headline numbers in lock-step with the activity feed. Both fan out to whichever admins are watching `/analytics/` — that's the Part 1 demo moment where the counter ticks up without a page refresh."
 
 > "And there's `AgentActivityMiddleware` in `agent/middleware.py` — it updates the agent's `last_seen_at` after every authenticated *staff* request. That's how the ops dashboard tells 'active' from 'idle'."
 
@@ -341,22 +341,24 @@ Switch to `analytics/signals.py`:
 
 > **Layer 1 — unit tests** in every app's `tests/` folder. Pure functions, mocked LLM calls. The `_score_*` functions in the recommender, the confidence formula, the intent router regexes — all unit-tested in isolation. `assistant/tests/test_router.py` alone covers every branch of `detect_intent`."
 
-> **Layer 2 — integration tests** that hit the real database, real signals, real channel layer. Example: `tickets/tests/test_routing.py` creates a real ticket, asserts that `TicketOffer` rows materialise with the correct `round_number`, and asserts that calling `accept` on one offer marks the others as `SUPERSEDED`. The `broadcast_signals` pytest marker keeps the analytics signals connected for the cases where I actually want to assert the side-effect."
+> **Layer 2 — integration tests** that hit the real database, real signals, real channel layer. Example: `tickets/tests/test_offer_routing.py` creates a real network-category ticket and asserts the resulting `TicketOffer` is sent to the network-skilled agent, not the generalist — that's the `recommend_agents` → `_rank_agents` → `offer_next_agent` chain firing end-to-end through a `post_save` signal. A second test calls `skip` on that offer through the real HTTP endpoint and asserts the offer flips to `DECLINED` while a fresh `PENDING` offer materialises for the next-best agent. The `broadcast_signals` pytest marker keeps the analytics post-save broadcasts connected for the cases where I actually want to assert the WebSocket side-effect."
 
 > **Layer 3 — end-to-end** with **Playwright** in `e2e/`. The conftest spins up Daphne in a subprocess on a random port, opens a real Chromium browser, logs in as a student, fills the wizard, submits a ticket, switches to an agent context, accepts the offer, sends a chat message, and asserts the student sees it. That's a real WebSocket round-trip across two browser contexts — the closest thing to an actual demo, run automatically."
 
 Show `pytest.ini`:
 ```ini
+[pytest]
 DJANGO_SETTINGS_MODULE = tsms.settings
+python_files = tests.py test_*.py
 asyncio_mode = auto
 addopts = -m "not e2e"
 markers =
-    e2e: Playwright end-to-end tests
-    real_channel_layer: opt-in to live Redis channel layer
-    broadcast_signals: keep analytics signals connected for this test
+    e2e: end-to-end browser tests (Playwright). Run with: pytest -m e2e
+    real_channel_layer: opt out of the in-memory channel layer override
+    broadcast_signals: keep analytics post_save broadcast signals connected
 ```
 
-> "The two custom markers exist because Channels and signal-driven side-effects make tests slow and flaky if they're on by default. Opt-in markers mean the fast suite stays fast — the full 535-test run completes in under a minute on my laptop."
+> "The two custom markers exist because Channels and signal-driven side-effects make tests slow and flaky if they're on by default. The conftest swaps the channel layer to an in-memory backend and disconnects the analytics post-save receivers — and `real_channel_layer` and `broadcast_signals` are the opt-ins that re-enable each one for the handful of tests that actually need to assert a live WebSocket push. Opt-in markers mean the fast suite stays fast — the full 535-test run completes in under a minute on my laptop."
 
 ---
 
@@ -366,23 +368,23 @@ markers =
 
 **Open `.github/workflows/ci.yml`.**
 
-> "CI runs on **GitHub Actions** on every push and every PR. Two stages."
+> "The workflow is checked in but currently commented out — my GitHub Student account hit the Actions minute cap, so the pipeline runs locally rather than on every push until billing is sorted. The design is two stages, and you can read it top-to-bottom from the file."
 
-> **Stage 1 — Ruff lint** (~30 seconds): catches unused imports, undefined names, common bugs from the `bugbear` ruleset, and import ordering.
+> **Stage 1 — Ruff lint** (~30 seconds): runs `ruff check .` against the rules configured in `pyproject.toml`, catching unused imports, undefined names, the `bugbear` set of common Python footguns, and import ordering.
 
-> **Stage 2 — pytest with coverage** (~3 minutes): spins up real Postgres-16-with-pgvector and Redis-7 service containers, sets `USE_FAKE_EMBEDDINGS=1` and `AI_FAQ_OFFLINE=1` so the LLM calls are stubbed (CI doesn't have a GPU and shouldn't pay Groq tokens), runs the full 535-test suite, uploads `coverage.xml` and an HTML report as a build artifact."
+> **Stage 2 — pytest with coverage** (~3 minutes, gated on lint passing): spins up real Postgres-16-with-pgvector and Redis-7 service containers, runs `CREATE EXTENSION vector;`, sets `USE_FAKE_EMBEDDINGS=1` and `AI_FAQ_OFFLINE=1` so the LLM calls are stubbed (CI doesn't have a GPU and shouldn't pay Groq tokens), runs the full 535-test suite under `pytest --cov`, and would upload `coverage.xml` plus the HTML report as build artifacts."
 
-> "If lint or tests fail, the build is red and I can't merge."
+> "It's the same pipeline I run locally before every commit — the only difference is whether GitHub or my laptop is doing the work."
 
 ### Docker
 
 **Open `Dockerfile`.**
 
-> "**Two-stage build**. Stage 1 is a fat builder image that compiles the native deps — `psycopg2`, `pgvector` C extension, `Pillow`. Stage 2 copies just the wheel cache into a slim Python 3.12 image and runs as a non-root user. Final image is around 200 MB."
+> "**Two-stage build**. Stage 1 is a fat builder image that installs `build-essential`, `libpq-dev`, `libjpeg-dev`, `zlib1g-dev` and runs `pip wheel` to pre-build every wheel in `requirements.txt` — that's where the slow native compiles for `psycopg2` and `Pillow` happen. Stage 2 is a `python:3.12-slim` runtime that does `pip install --no-index --find-links=/wheels`, drops to a non-root `app` user, and `EXPOSE`s 8000. No compilers in the runtime image — just `libpq5`, `libjpeg62-turbo`, and `curl` for the healthcheck."
 
 **Open `docker-compose.yml`.**
 
-> "Compose orchestrates four services for local dev: `pgvector/pg16`, `redis:7-alpine`, the Django app, and a one-shot seed container. There's an `extra_host` entry mapping `host.docker.internal` so the container can reach the Ollama daemon running on the host Mac."
+> "Compose orchestrates three services for local dev: `pgvector/pgvector:pg16` for the database (port 5433 on the host so it doesn't clash with a local Postgres), `redis:7-alpine` for the channel layer, and the Django app itself. Both data services have `healthcheck` blocks and `web` waits on `service_healthy` so we never race a half-initialised database. Seeding runs inside the web container's entrypoint when `SEED_ON_START=1` — no separate seed container needed. There's an `extra_hosts` entry mapping `host.docker.internal:host-gateway` so the container can reach the Ollama daemon running on the host machine — required on Linux, harmless on macOS."
 
 **Open `docker-entrypoint.sh`:**
 
@@ -396,7 +398,7 @@ markers =
 
 **Open `core/flags.py`.**
 
-> "The graceful-degradation story is anchored by a tiny feature-flag module. `is_ai_auto_assign()`, `is_ai_recommend_mode()`, `get_ai_assignment_mode()` — three env-driven booleans that let me dial AI behaviour from `off` to `recommend` to `auto` without redeploying. Combined with `USE_FAKE_EMBEDDINGS=1` and `AI_FAQ_OFFLINE=1`, the same code base runs in four distinct modes — full local AI, recommend-only, embeddings-disabled lexical, and fully offline — all gated by env vars."
+> "The graceful-degradation story is anchored by a tiny feature-flag module. One env var — `AI_ASSIGNMENT_MODE` — drives three helper functions: `get_ai_assignment_mode()` returns the raw string, and `is_ai_auto_assign()` / `is_ai_recommend_mode()` are the call-site-friendly booleans derived from it. The mode dials AI behaviour from `off` to `recommend` to `auto` without redeploying. Combined with `USE_FAKE_EMBEDDINGS` (lexical-vs-vector retrieval), `AI_FAQ_OFFLINE` (canned-vs-LLM answers), and `LLM_PROVIDER` (`ollama` vs `groq`), the same code base runs in four distinct configurations — full local AI, recommend-only, embeddings-disabled lexical, and fully offline — all gated by env vars, no code change."
 
 ---
 
