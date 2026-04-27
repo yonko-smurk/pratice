@@ -170,7 +170,7 @@ else:
 ```
 > "The confidence isn't just `max(similarity)`. It's a 50/50 blend of the **best** match and the **average of the top three**. Why? Because a single high-scoring chunk in a sea of low ones is unreliable — it could be a one-off keyword collision. A high *average* across the top-three means several semantically related chunks all agree, which is the signal I actually trust. Below 0.6 the assistant escalates to community fallback and then to a ticket — the integrated pipeline I show in Part 1."
 
-> "And if Ollama isn't reachable, `embed_text` returns a zero vector and `_search_chunks` falls back to lexical `icontains` over `KbChunk.text`. Same view, same response shape, same SSE stream — the swap is invisible to the frontend. That's how the Render deployment works without a GPU."
+> "And there's a clean degradation path. The `_search_chunks` function checks the `USE_FAKE_EMBEDDINGS` setting up front — if it's on, retrieval skips the embedding step entirely and falls back to `_lexical_snippets`, which runs `icontains` over `KbArticle.title` and `body_md` and computes a cheap match-ratio similarity. That's exactly how the Render deployment works: no GPU, no Ollama, `USE_FAKE_EMBEDDINGS=1` in the env, same view, same response shape, same SSE stream — the swap is invisible to the frontend. As a defence-in-depth layer, `embed_text` itself also falls back to a deterministic fake embedding if Ollama 5xxs unexpectedly, so the system stays up even when something downstream breaks."
 
 ---
 
