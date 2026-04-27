@@ -88,8 +88,56 @@ class KbChunk(models.Model):
 
 > "The macro shape is a **monolithic ASGI app, three roles, two real-time channels**. There's no microservice split because the system is single-tenant — splitting it would add network hops without buying anything. But the *internal* boundaries are strict: every write that crosses an app boundary goes through a service function, and every cross-cutting concern — audit logging, notifications, reputation recalculation — is wired up via Django signals so the calling code never has to remember to fire them."
 
-Trace one request out loud:
-> "When a student types into the assistant chat: `POST /assistant/send-stream/` hits `assistant/views.py::send_message_stream`, which first runs the intent router (`detect_intent`) for cheap structured queries — and for everything else delegates to `ai_faq/services.py::stream_answer_with_context`. That generator embeds the query through `embed_text()` (Ollama's `/api/embed` endpoint), runs a pgvector cosine query, computes a confidence score, calls the LLM, and yields **Server-Sent Events** chunk by chunk wrapped in a `StreamingHttpResponse(content_type='text/event-stream')`. The non-streaming sibling endpoint `POST /ai/answer/` (in `ai_faq/views.py`) uses the same retrieval pipeline via `answer_with_context` but returns a single JSON blob — that's what the legacy HTMX widgets call. Same retrieval, two response shapes."
+#### Trace one request out loud — **open these three files in this order:**
+
+**Step 1 — Open `assistant/urls.py`** (the URL that triggers the chain).
+> "When a student hits send in the assistant, the browser POSTs to `/assistant/send-stream/`."
+
+Point at line ~13:
+```python
+path("send-stream/", views.send_message_stream, name="send_stream"),
+```
+
+**Step 2 — Open `assistant/views.py`, jump to line 526.**
+> "That URL routes here — `send_message_stream`. The view does three things: saves the user message, runs `detect_intent` to short-circuit cheap structured queries like 'show my tickets', and for anything that needs real reasoning it delegates to the RAG pipeline."
+
+Point at line 535 and line 625:
+```python
+from ai_faq.services import stream_answer_with_context   # line 535
+...
+for event in stream_answer_with_context(text):           # line 625
+    yield f"data: {json.dumps(event)}\n\n"
+```
+
+> "And the whole thing is wrapped in a `StreamingHttpResponse` with `content_type='text/event-stream'` — that's Server-Sent Events."
+
+Point at line 682:
+```python
+response = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
+```
+
+**Step 3 — Open `ai_faq/services.py`, jump to line 228.**
+> "This is the generator that does the actual work. It embeds the query through `embed_text()` — line 119 — which calls Ollama's `/api/embed` endpoint. Then it runs a pgvector cosine query, computes a confidence score, calls the LLM, and **yields events chunk by chunk** rather than returning a single response."
+
+Point at line 228:
+```python
+def stream_answer_with_context(question: str):
+    # ... embed → cosine search → confidence → LLM stream ...
+    yield {"chunk": text_piece}
+    yield {"done": True, "confidence": conf, "snippets": [...], "suggest_escalation": conf < 0.6}
+```
+
+**Step 4 — scroll down to line 324 in the same file.**
+> "And there's a non-streaming sibling — `answer_with_context` — same retrieval pipeline, same confidence formula, but returns a single JSON blob instead of a stream. That's the one called by the older HTMX `POST /ai/answer/` endpoint in `ai_faq/views.py`. Same retrieval, two response shapes — the streaming one for the chat, the JSON one for legacy widgets."
+
+Point at line 324:
+```python
+def answer_with_context(question: str) -> dict:
+    # same retrieval, same confidence — single dict return
+    return {"answer": ..., "confidence": ..., "snippets": ..., "suggest_escalation": ...}
+```
+
+> "So that's the architecture in one trace: URL → view → service → external embed → pgvector → LLM → SSE back to the browser. Three apps, four files, one request — and every cross-app call goes through a typed service function."
 
 ---
 
