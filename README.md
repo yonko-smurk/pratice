@@ -72,7 +72,7 @@ Walk the explorer once, point at each app:
 
 ### Storage backend
 
-> "Storage is **PostgreSQL 16** with the **pgvector** extension enabled in `kb/migrations/0002_vector_extension.py`. I chose Postgres over a separate vector DB like Pinecone or Chroma because pgvector lets me keep the embeddings inside the relational schema — every `KbChunk` row has its parent article as a foreign key *and* a 768-dimensional embedding vector on the same row, so a single query gives me both the cosine-ranked chunks and the article metadata."
+> "Storage is **PostgreSQL 16** with the **pgvector** extension enabled in `kb/migrations/0002_vector_extension.py`. I chose Postgres over a separate vector DB like Pinecone or Chroma because pgvector lets me keep the embeddings inside the relational schema — every `KbChunk` row has its parent article as a foreign key *and* an embedding vector on the same row (768-dimensional by default), so a single query gives me both the cosine-ranked chunks and the article metadata."
 
 Open `kb/models.py` — point first at line 12 (the `EMBED_DIM` constant), then scroll to line 26 (the `KbChunk` model):
 ```python
@@ -124,7 +124,7 @@ response = StreamingHttpResponse(event_stream(), content_type="text/event-stream
 ```
 
 **Step 3 — Open `ai_faq/services.py`, jump to line 228.**
-> "This is the generator that does the actual work. It embeds the query through `embed_text()` — line 119 — which calls Ollama's `/api/embed` endpoint. Then it runs a pgvector cosine query, computes a confidence score, calls the LLM, and **yields events chunk by chunk** rather than returning a single response."
+> "This is the generator that does the actual work. It delegates retrieval to `_search_chunks` — we'll go deep into that in the next section — which embeds the query through `embed_text()` (line 119, calls Ollama's `/api/embed` endpoint) and runs the pgvector cosine query. Then this function computes a confidence score, calls the LLM, and **yields events chunk by chunk** rather than returning a single response."
 
 Point at line 228:
 ```python
@@ -197,32 +197,54 @@ else:
 
 ## 4 · Critical Algorithm 2 — Agent Ranking  *(0:45)*
 
-**Open `community/recommender.py` line ~46.**
+**Open `community/recommender.py` and jump to `recommend_agents` at line 45.**
 
 **Say:**
 > "This is `recommend_agents` — the function that powers both the 'Top 3 Recommended Agents' card on every ticket detail page and the AI Recommendations panel on the ops dashboard. It produces a 100-point score per agent across **five weighted signals**:"
 
-Show the structure:
+Show the structure (lines 71–125, summarised — point at the five `_score_*` calls):
 ```python
-def recommend_agents(ticket, limit=5):
-    candidates = []
-    for agent in eligible_agents:
-        skill_score    = _score_skill_match(agent, ticket)        # 0–30
-        category_score = _score_category_expertise(agent, ticket) # 0–25
-        perf_score     = _score_performance(agent)                # 0–20
-        comm_score     = _score_community_expertise(agent)        # 0–15
-        avail_score    = _score_availability(agent)               # 0–10 (can go negative)
-        total = skill_score + category_score + perf_score + comm_score + avail_score
-        candidates.append({
-            "agent": agent, "score": total,
-            "subscores": {...}, "reasons": [...],
-        })
-    return sorted(candidates, key=lambda c: -c["score"])[:limit]
+for agent in agents:
+    score = 0.0
+    reasons = []
+
+    # A. Skill match (0–30)
+    skill_score = _score_skill_match(agent, ticket_keywords, ticket_category)
+    score += skill_score
+    if skill_score > 0:
+        reasons.append(f"Skill match: {skill_score:.0f}/30")
+
+    # B. Category expertise (0–25)
+    cat_score = _score_category_expertise(agent, ticket_category)
+    # C. Performance in category (0–20)
+    perf_score = _score_performance(agent, ticket_category)
+    # D. Community expertise (0–15)
+    comm_score = _score_community_expertise(agent, ticket_category, ticket_keywords)
+    # E. Availability (0–10, can go negative)
+    avail_score = _score_availability(profile)
+    if avail_score > 0:
+        reasons.append(f"Available: {avail_score:.0f}/10")
+    elif avail_score < 0:
+        reasons.append(f"Busy/overloaded ({avail_score:.0f})")
+
+    results.append({
+        "agent": agent, "email": agent.email, "name": ...,
+        "score": round(score, 1),
+        "reasons": reasons,
+        "skill_score": round(skill_score, 1),
+        "category_score": round(cat_score, 1),
+        "performance_score": round(perf_score, 1),
+        "community_score": round(comm_score, 1),
+        "availability_score": round(avail_score, 1),
+    })
+
+results.sort(key=lambda r: r["score"], reverse=True)
+return results[:limit]
 ```
 
-> "Three things to call out. **First**, the weights are not arbitrary — skill match dominates because the worst outcome is sending a printer ticket to a network specialist; community expertise gets only 15 points because a great forum contributor isn't necessarily fast at tickets. **Second**, availability can go *negative* — if an agent is in focus mode or already at max capacity, the function actively penalises them rather than just zeroing them out. **Third**, every score carries a `reasons` list — strings like `'Matched 4/5 skill keywords'` or `'Avg handle time 12 min'` — and those propagate all the way to the UI so the admin can see *why* the recommender suggested this agent. That transparency was a deliberate design choice; black-box recommenders are a hard sell in a support-floor context."
+> "Three things to call out. **First**, the weights are not arbitrary — skill match dominates because the worst outcome is sending a printer ticket to a network specialist; community expertise gets only 15 points because a great forum contributor isn't necessarily fast at tickets. **Second**, availability genuinely goes *negative* — focus mode is a flat −5, an `AWAY` presence status is −3, and capacity above 90 % subtracts another 5; the function actively penalises overloaded agents rather than just zeroing them out. **Third**, every result row carries a `reasons` list — populated as the scorer runs, with strings like `'Skill match: 22/30'`, `'Category expertise: 18/25'`, or `'Busy/overloaded (-7)'` — and those propagate all the way to the UI so the admin can see *why* the recommender suggested this agent. That transparency was a deliberate design choice; black-box recommenders are a hard sell in a support-floor context."
 
-> "The category-expertise sub-score uses `log2(resolved_in_category)` rather than raw count, because an agent who's resolved 100 email tickets isn't ten times better than one who's resolved 10 — the marginal expertise tapers off."
+> "Scroll down to `_score_category_expertise` at line 191 — the category sub-score is a blend of two signals: `log2(resolved_in_category + 1) × 4` for raw volume (capped at 15), plus a specialisation bonus of `(% of this agent's resolutions in this category) × 10`. The log scale is deliberate: an agent who's resolved 100 email tickets isn't ten times better than one who's resolved 10 — the marginal expertise tapers off. The specialisation term is what separates a generalist from a category expert."
 
 ---
 
