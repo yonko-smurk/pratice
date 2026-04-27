@@ -255,7 +255,7 @@ return results[:limit]
 **Say:**
 > "Recommendation is one thing, *delivery* is another. When a new ticket is created, a `post_save` signal in `tickets/signals.py` fires `offer_next_agent`, and that's the function that picks the top-ranked agent and turns it into a real time-boxed offer."
 
-Show the core (lines 150–185):
+Show the core (lines 150–186):
 ```python
 # 1. Expire stale pending offers for this ticket
 TicketOffer.objects.filter(
@@ -269,15 +269,20 @@ already_offered = set(
     TicketOffer.objects.filter(ticket=ticket).values_list("agent_id", flat=True)
 )
 ranked = _rank_agents(ticket, exclude_agent_ids=already_offered)
+if not ranked:
+    return None
 
 # 3. Create a new offer for the top-ranked agent with a 45-second TTL
-TicketOffer.objects.create(
+chosen = ranked[0]
+round_number = TicketOffer.objects.filter(ticket=ticket).count() + 1
+
+return TicketOffer.objects.create(
     ticket=ticket,
     agent=chosen["agent"],
     status=TicketOffer.Status.PENDING,
     offered_at=now,
     expires_at=now + timedelta(seconds=timeout_seconds),  # default 45s
-    round_number=TicketOffer.objects.filter(ticket=ticket).count() + 1,
+    round_number=round_number,
     score=chosen["score"],
     reason=chosen["reason"],
 )
@@ -285,7 +290,7 @@ TicketOffer.objects.create(
 
 > "Three subtleties. The **`round_number`** lets me reconstruct the offer history per ticket — useful for analytics and for debugging routing fairness. **`exclude_agent_ids`** stops the same agent being offered the same ticket twice. And the **45-second expiry** means a busy agent who never opens their dashboard can't block a ticket — it auto-cycles to the next-best agent. That last one is the difference between a routing system that *works* and one that silently jams."
 
-> "`_rank_agents` itself is a leaner version of the 100-point scorer — it computes `(skill_score * 10) - load` because for *routing* (as opposed to recommendation) the only signals that matter in the moment are 'do they know the topic' and 'are they free right now'."
+> "`_rank_agents` lives just above at line 109 — a separate, leaner scorer for routing (the 100-point `recommend_agents` is over in `community/recommender.py` and is used by the *recommendation* UI, not by the offer pipeline). The formula is at line 134: `score = (skill_score * 10) - load`. Two signals: skill fit times ten, minus current open-ticket load. The sort key on line 146 is `(skill_score > 0, score)` reversed — so any agent who actually matches the ticket's specialty always ranks above unskilled fallbacks regardless of load. The `reason` string returned to the offer is literally `'Matched specialty'` or `'Fallback available agent'` — that's what shows on the agent's offer card."
 
 ---
 
