@@ -410,10 +410,10 @@ markers =
 
 **Open `htmlcov/index.html` in the browser.**
 
-> "Coverage is measured by `coverage.py` with **branch coverage** turned on — meaning a line that contains an `if/else` only counts as fully covered if both branches were executed. The headline number is **78 %** across roughly 5 000 statements, with the high-value modules — `accounts`, `tickets/routing`, `ai_faq/services`, `community/recommender` — well above 90 %. The lowest-covered files are the LLM streaming helpers, where the missing lines are real-network error paths that I deliberately don't exercise in CI."
+> "Coverage is measured by `coverage.py` with **branch tracking enabled** — `branch = true` in `[tool.coverage.run]`, so the report knows about both arms of every `if/else` even when the headline figure summarises statements. The headline is **78 %** — 5 276 of 6 762 covered statements across the 12 application modules — with the high-value files (`tickets/routing`, `ai_faq/services`, `community/recommender`, `accounts/decorators`) sitting noticeably higher than the project average. The lowest-covered files are the LLM streaming helpers, where the missing lines are real-network error paths I deliberately don't exercise in CI."
 
 **Closing line:**
-> "So to wrap: 12 Django apps, 5 000 lines of Python at 78 % branch coverage across 535 tests, three AI subsystems wired together by a shared confidence-gating pipeline, two WebSocket channels backed by Redis, deployed identically by Docker locally and by Render in the cloud, with the same code base happily switching between local Ollama and cloud Groq via a single env var. That's the engineering story."
+> "So to wrap: 12 Django apps, ~6 800 covered statements at 78 % coverage across 535 tests, three AI subsystems — triage, FAQ retrieval, and the assistant router — wired together by a shared confidence-gating pipeline, two WebSocket consumers backed by Redis, deployed identically by Docker locally and by Render in the cloud, with the same code base happily switching between local Ollama and cloud Groq via a single env var. That's the engineering story."
 
 ---
 
