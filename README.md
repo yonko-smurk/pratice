@@ -237,18 +237,24 @@ Have a **fresh local PDF receipt** of the architecture diagram on a side monitor
 
 ---
 
-## 8 · Admin: Ops Dashboard, Focus Mode, Broadcast, Triage Panel  *(1:30)*
+## 8 · Admin: Ops Dashboard + AI Recommendations  *(1:30)*
 
 **Window C.** `/ops/dashboard/`.
 
 **Say:**
-> "The ops dashboard is the operational nerve centre — `ops/views.py::ops_dashboard` — a single-page view of the entire support floor in real time."
+> "The ops dashboard is the operational nerve centre — `ops/views.py::ops_dashboard` — a single-page real-time view of the support floor with an AI recommendation engine sitting on top of it."
 
-1. Show the **agent roster** with status indicators (Online / Away / Offline).
-2. Show **queue depth**, **tickets in progress**, **breached SLAs**, **live triage feed**.
-3. Click an agent → enter **Focus Mode** — shows that agent's current ticket, last action, average handle time today.
-4. Click **Broadcast** → send an announcement: **"Reminder: Friday standup at 4pm"** → switch to Window B for half a second to show it appearing in the agent's notification bar.
-5. Open the **Triage Panel** — show pending tickets with AI-suggested category + priority + confidence. Approve one suggestion with one click.
+1. Show the **top KPI strip** — open tickets, in-progress, breached SLAs, agents online (calculated by `ops/views.py` from live ticket and agent state).
+2. Show the **agent roster table** — for each agent: open tickets, workload score (colour-coded green/orange/red against `max_concurrent_tickets`), Focus-Mode flag (On/Off — set by the agent themselves on their profile, not toggled from here), last-seen timestamp.
+3. Scroll to the **AI Recommendations panel** (`ops/views.py::_get_ops_recommendations`). Walk through each card type that's present:
+   - **`agent_match`** — "Reassign ticket #N to {agent}" — top-3 candidates listed inline with their match scores from `community/recommender.py`.
+   - **`workload_balance`** — "{Agent A} is overloaded (workload N) — move tickets to {Agent B}".
+   - **`sla_risk`** — "Ticket #N breaches SLA in <30 min — escalate".
+   - **`stale_ticket`** — "Ticket #N untouched for X days".
+4. Click the **`View →`** deep-link on one recommendation — it routes to the relevant ticket / agent profile so admin can act.
+5. Briefly mention the empty state: when nothing's wrong the panel renders the green *"All clear — no urgent recommendations right now"* card. *(If your demo data is too clean, lower an SLA hour in admin or assign 5 tickets to one agent before going on stage to make sure recommendations populate.)*
+
+> "So the dashboard is observability *plus* a prescriptive layer — instead of just showing red numbers, it tells the admin specifically which ticket to reassign, to whom, and why."
 
 ---
 
