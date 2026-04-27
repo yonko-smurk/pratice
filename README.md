@@ -25,7 +25,8 @@ source .venv/bin/activate
 python manage.py migrate
 python scripts/seed_demo.py     # users, agents+skills, tickets, KB articles, embeddings
 python _seed_demo_community.py  # seeds the resolved Q&A used by Branch B
-python _check_kb.py             # confirm embeddings exist
+python scripts/seed_ops_recommendations.py  # guarantees all 4 ops-recommendation cards render in Section 8
+PYTHONPATH=. python scripts/check_kb.py     # confirm embeddings exist
 daphne -b 0.0.0.0 -p 8000 tsms.asgi:application
 ```
 
@@ -59,7 +60,7 @@ Have a **fresh local PDF receipt** of the architecture diagram on a side monitor
 | 5 | Agent — Queue, claim, skill routing, recommended steps | B | 2:00 | 7:30 |
 | 6 | Real-time chat (Student ↔ Agent) + presence + notifications | A+B | 1:30 | 9:00 |
 | 7 | Agent — Profile, skills, availability, agent analytics | B | 1:00 | 10:00 |
-| 8 | Admin — Ops dashboard, focus mode, broadcast, triage panel | C | 1:30 | 11:30 |
+| 8 | Admin — Ops dashboard + AI recommendations | C | 1:30 | 11:30 |
 | 9 | Admin — Analytics dashboard (live KPI WebSocket feed) | C | 1:00 | 12:30 |
 | 10 | Admin — KB CRUD + embedding regeneration + categories/SLA | C | 0:45 | 13:15 |
 | 11 | Local-first vs cloud fallback (live Render demo) | D | 0:30 | 13:45 |
@@ -252,7 +253,7 @@ Have a **fresh local PDF receipt** of the architecture diagram on a side monitor
    - **`sla_risk`** — "Ticket #N breaches SLA in <30 min — escalate".
    - **`stale_ticket`** — "Ticket #N untouched for X days".
 4. Click the **`View →`** deep-link on one recommendation — it routes to the relevant ticket / agent profile so admin can act.
-5. Briefly mention the empty state: when nothing's wrong the panel renders the green *"All clear — no urgent recommendations right now"* card. *(If your demo data is too clean, lower an SLA hour in admin or assign 5 tickets to one agent before going on stage to make sure recommendations populate.)*
+5. Briefly mention the empty state: when nothing's wrong the panel renders the green *"All clear — no urgent recommendations right now"* card. *(The pre-demo helper `python scripts/seed_ops_recommendations.py` guarantees one of each card type — `agent_match` (unassigned URGENT projector ticket), `workload_balance` (Alice at 9/10 vs Bob at 0/10), `sla_risk` (exam-portal ticket due in 30 min), `stale_ticket` (keyboard request backdated 72h) — so the panel is never empty on stage.)*
 
 > "So the dashboard is observability *plus* a prescriptive layer — instead of just showing red numbers, it tells the admin specifically which ticket to reassign, to whom, and why."
 
@@ -329,7 +330,7 @@ Have a **fresh local PDF receipt** of the architecture diagram on a side monitor
 **Roles & Auth (3.1–3.3 of README)**
 - [x] Student dashboard, register, login, profile, apply-as-agent
 - [x] Agent queue, claim, profile, skills, availability
-- [x] Admin ops dashboard, focus mode, broadcast, triage approval
+- [x] Admin ops dashboard with KPIs, agent roster, AI recommendation engine (`agent_match`, `workload_balance`, `sla_risk`, `stale_ticket`)
 
 **Ticket Lifecycle**
 - [x] Create, attach files, list, my-tickets, detail, claim, assign, reassign
